@@ -1,3 +1,7 @@
 node_modules/
 .env
 .env.*
+waltzify_database_backup.sql
+ywo_backup.sql
+.env
+node_modules/
