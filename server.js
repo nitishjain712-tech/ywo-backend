@@ -39,6 +39,7 @@ const estimatedDeliveryRoutes = require("./routes/estimatedDeliveryDateRoutes");
 const extraDeliveryChargeRoutes = require("./routes/extraDeliveryChargeRoutes");
 const codSettingsRoutes = require("./routes/codSettingsRoutes");
 const reportRoutes = require("./routes/reportRoutes");
+const contactRoutes = require("./routes/contactRoutes");
 
 const errorHandler = require('./middlewares/errorHandler'); // 🟢 Central error handler
 const requestLogger = require('./middlewares/requestLogger'); // 🟢 Central request logger
@@ -136,6 +137,7 @@ app.use("/api/estimated-delivery-dates", estimatedDeliveryRoutes);
 app.use("/api/extra-delivery-charges", extraDeliveryChargeRoutes);
 app.use("/api/cod-settings", codSettingsRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/contact", contactRoutes);
   // payment routes
 
 // ✅ Health Check Route
