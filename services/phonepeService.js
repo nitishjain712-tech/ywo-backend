@@ -1,49 +1,68 @@
-const {
-  StandardCheckoutClient,
-  Env,
-  StandardCheckoutPayRequest,
-  CreateSdkOrderRequest,
-  RefundRequest,
-  MetaInfo,
-} = require("pg-sdk-node");
-
 require("dotenv").config();
 const logger = require("../utils/logger");
 const pLimit = require("p-limit").default;
 
-// ===================== ENV CONFIG =====================
-const {
-  PHONEPE_CLIENT_ID,
-  PHONEPE_CLIENT_SECRET,
-  PHONEPE_CLIENT_VERSION,
-  PHONEPE_ENV = "PROD",
-
-  FRONTEND_URL = "https://waltzify.com",
-  BACKEND_URL = "https://www.api.waltzify.com",
-} = process.env;
-
-if (!PHONEPE_CLIENT_ID || !PHONEPE_CLIENT_SECRET || !PHONEPE_CLIENT_VERSION) {
-  throw new Error("❌ Missing PhonePe credentials in .env");
-}
-
-// ===================== ENV MAPPING =====================
-const env =
-  PHONEPE_ENV === "PROD"
-    ? Env.PRODUCTION
-    : Env.SANDBOX;
-
-logger.info(`[PhonePe] Environment: ${PHONEPE_ENV}`);
-
-// ===================== CLIENT INIT =====================
-const phonePeClient = StandardCheckoutClient.getInstance(
-  PHONEPE_CLIENT_ID,
-  PHONEPE_CLIENT_SECRET,
-  PHONEPE_CLIENT_VERSION,
-  env
-);
-
 // ===================== RATE LIMITER =====================
 const limit = pLimit(5); // Max 5 concurrent PhonePe calls
+
+// ===================== LAZY SDK & CLIENT LOADER =====================
+let cachedPhonePeSdk = null;
+let cachedPhonePeClient = null;
+
+function getPhonePeSdk() {
+  if (cachedPhonePeSdk) return cachedPhonePeSdk;
+  try {
+    cachedPhonePeSdk = require("pg-sdk-node");
+    return cachedPhonePeSdk;
+  } catch (err) {
+    if (
+      err.code === "MODULE_NOT_FOUND" &&
+      (err.message.includes("pg-sdk-node") || err.requireStack?.[0]?.includes("phonepeService"))
+    ) {
+      const sdkError = new Error(
+        "PhonePe SDK ('pg-sdk-node') is not installed or unavailable. Ensure PhonePe SDK is installed to use PhonePe payment gateway."
+      );
+      sdkError.code = "PHONEPE_SDK_NOT_INSTALLED";
+      throw sdkError;
+    }
+    throw err;
+  }
+}
+
+function getPhonePeClient() {
+  if (cachedPhonePeClient) {
+    return { client: cachedPhonePeClient, sdk: cachedPhonePeSdk };
+  }
+
+  const sdk = getPhonePeSdk();
+
+  const {
+    PHONEPE_CLIENT_ID,
+    PHONEPE_CLIENT_SECRET,
+    PHONEPE_CLIENT_VERSION,
+    PHONEPE_ENV = "PROD",
+  } = process.env;
+
+  if (!PHONEPE_CLIENT_ID || !PHONEPE_CLIENT_SECRET || !PHONEPE_CLIENT_VERSION) {
+    throw new Error("❌ Missing PhonePe credentials in .env");
+  }
+
+  const env =
+    PHONEPE_ENV === "PROD"
+      ? sdk.Env.PRODUCTION
+      : sdk.Env.SANDBOX;
+
+  logger.info(`[PhonePe] Environment: ${PHONEPE_ENV}`);
+
+  cachedPhonePeClient = sdk.StandardCheckoutClient.getInstance(
+    PHONEPE_CLIENT_ID,
+    PHONEPE_CLIENT_SECRET,
+    PHONEPE_CLIENT_VERSION,
+    env
+  );
+
+  return { client: cachedPhonePeClient, sdk };
+}
 
 // ===================== SAFE CALL WRAPPER =====================
 async function safePhonePeCall(fn, args = [], retries = 2) {
@@ -74,6 +93,14 @@ async function safePhonePeCall(fn, args = [], retries = 2) {
 
 // ===================== PAYMENT INITIATION =====================
 async function initiatePayment(orderId, amount) {
+  const { client, sdk } = getPhonePeClient();
+  const { MetaInfo, StandardCheckoutPayRequest } = sdk;
+
+  const {
+    FRONTEND_URL = "https://waltzify.com",
+    BACKEND_URL = "https://www.api.waltzify.com",
+  } = process.env;
+
   const merchantOrderId = `ORD_${orderId}_${Date.now()}`;
   const amountPaise = Math.round(amount * 100);
 
@@ -90,7 +117,7 @@ async function initiatePayment(orderId, amount) {
 
   try {
     const response = await safePhonePeCall(
-      phonePeClient.pay.bind(phonePeClient),
+      client.pay.bind(client),
       [
         request,
         { callbackUrl: `${BACKEND_URL}/api/payment/callback` },
@@ -98,6 +125,7 @@ async function initiatePayment(orderId, amount) {
     );
 
     return {
+      id: response.orderId || merchantOrderId,
       redirectUrl: response.redirectUrl,
       transaction_id: response.orderId,
       merchant_order_id: merchantOrderId,
@@ -105,12 +133,19 @@ async function initiatePayment(orderId, amount) {
     };
   } catch (err) {
     logger.error("❌ PhonePe initiate error", err);
-    throw new Error("Payment initiation failed");
+    throw new Error(err?.message || "Payment initiation failed");
   }
 }
 
 // ===================== SDK ORDER CREATION =====================
 async function createSdkOrder(orderId, amount) {
+  const { client, sdk } = getPhonePeClient();
+  const { CreateSdkOrderRequest } = sdk;
+
+  const {
+    FRONTEND_URL = "https://waltzify.com",
+  } = process.env;
+
   const merchantOrderId = `ORD_${orderId}_${Date.now()}`;
   const amountPaise = Math.round(amount * 100);
 
@@ -122,7 +157,7 @@ async function createSdkOrder(orderId, amount) {
 
   try {
     const response = await safePhonePeCall(
-      phonePeClient.createSdkOrder.bind(phonePeClient),
+      client.createSdkOrder.bind(client),
       [request]
     );
 
@@ -134,7 +169,7 @@ async function createSdkOrder(orderId, amount) {
     };
   } catch (err) {
     logger.error("❌ PhonePe SDK order error", err);
-    throw new Error("Create SDK order failed");
+    throw new Error(err?.message || "Create SDK order failed");
   }
 }
 
@@ -144,9 +179,11 @@ async function checkOrderStatus(merchantOrderId, details = false) {
     throw new Error("Merchant Order ID is required");
   }
 
+  const { client } = getPhonePeClient();
+
   try {
     const response = await safePhonePeCall(
-      phonePeClient.getOrderStatus.bind(phonePeClient),
+      client.getOrderStatus.bind(client),
       [merchantOrderId, details]
     );
 
@@ -178,7 +215,7 @@ async function checkOrderStatus(merchantOrderId, details = false) {
     };
   } catch (err) {
     logger.error(`❌ PhonePe status failed for ${merchantOrderId}`, err);
-    throw new Error("Unable to fetch order status");
+    throw new Error(err?.message || "Unable to fetch order status");
   }
 }
 
@@ -187,6 +224,9 @@ async function checkOrderStatusWithRetry(merchantOrderId, details = false, retri
   try {
     return await checkOrderStatus(merchantOrderId, details);
   } catch (err) {
+    if (err.code === "PHONEPE_SDK_NOT_INSTALLED" || err.message?.includes("Missing PhonePe credentials")) {
+      throw err;
+    }
     if (retries > 0) {
       logger.warn(`[Retry] Retrying status check for ${merchantOrderId}...`);
       await new Promise(r => setTimeout(r, 1500));
@@ -204,7 +244,8 @@ function verifyCallbackSignature(
   bodyString
 ) {
   try {
-    return phonePeClient.validateCallback(
+    const { client } = getPhonePeClient();
+    return client.validateCallback(
       username,
       password,
       authorizationHeader,
@@ -218,6 +259,9 @@ function verifyCallbackSignature(
 
 // ===================== REFUND =====================
 async function refundPayment(originalMerchantOrderId, refundAmount) {
+  const { client, sdk } = getPhonePeClient();
+  const { RefundRequest } = sdk;
+
   const merchantRefundId = `REFUND_${Date.now()}`;
   const amountPaise = Math.round(refundAmount * 100);
 
@@ -229,22 +273,23 @@ async function refundPayment(originalMerchantOrderId, refundAmount) {
 
   try {
     return await safePhonePeCall(
-      phonePeClient.refund.bind(phonePeClient),
+      client.refund.bind(client),
       [request]
     );
   } catch (err) {
     logger.error("❌ PhonePe refund failed", err);
-    throw new Error("Refund failed");
+    throw new Error(err?.message || "Refund failed");
   }
 }
 
 // ===================== EXPORTS =====================
 module.exports = {
   initiatePayment,
+  createOrder: initiatePayment,
   createSdkOrder,
   checkOrderStatus,
   verifyCallbackSignature,
-checkOrderStatusWithRetry,
+  checkOrderStatusWithRetry,
   refundPayment,
 };
 

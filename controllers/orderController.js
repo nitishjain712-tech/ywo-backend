@@ -1,9 +1,8 @@
-﻿const logger = require("../utils/logger");
+const logger = require("../utils/logger");
 const pool = require("../config/db");
 const Order = require("../models/orderModel");
 const OrderItem = require("../models/orderItemModel");
 const Payment = require("../models/paymentModel");
-const phonepeService = require("../services/phonepeService");
 const { calculateShipping } = require('./shippingController');
 const couponModel = require("../models/couponModel");
 const { releaseStockForOrder, revertCouponsForOrder, revertCouponsForCancelledItems, recordCouponUsageForOrder } = require("../utils/orderHelpers");

@@ -37,7 +37,6 @@
     "nodemon": "^3.1.10",
     "p-limit": "^7.1.1",
     "pdf-lib": "^1.17.1",
-    "pg-sdk-node": "https://phonepe.mycloudrepo.io/public/repositories/phonepe-pg-sdk-node/releases/v2/phonepe-pg-sdk-node.tgz",
     "qs": "^6.14.0",
     "razorpay": "^2.9.6",
     "winston": "^3.18.3"
